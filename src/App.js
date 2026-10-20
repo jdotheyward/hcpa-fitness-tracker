@@ -1,284 +1,123 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Icon from "./Icon";
+import { EXERCISES, FORM_GROUPS, PHASES, ROUTINES, SCHEDULE, SESSIONS_PER_WEEK, SPIN_PHASES, spinPhaseForWeek } from "./data";
+import { addDays, formatLong, formatShort, formatWeekRange, programWeek, startOfWeek, todayISO } from "./dates";
+import {
+  completedDates, exportBackup, isSessionComplete, loadState, mergeBackup, newNoteId,
+  planFor, requestPersistentStorage, saveState, sessionProgress,
+} from "./storage";
 
-const BRAND = {
-  dark: "#1A1A1A",
-  charcoal: "#2E2E2E",
-  gold: "#C4A84A",
-  white: "#FFFFFF",
-  goldLight: "#D4B85A",
-  goldDim: "#8A7030",
-  success: "#4CAF82",
-  warn: "#E07840",
-};
+const TABS = [["today", "Today"], ["week", "Week"], ["history", "History"], ["routines", "Routines"], ["form", "Form"], ["spin", "Spin"], ["notes", "Notes"]];
+const TYPE_LABEL = { full: "Full session", light: "Light session", rest: "Rest day" };
+const BACKUP_REMINDER_DAYS = 30;
 
-const WEEKS = [
-  { label: "Weeks 1–2", desc: "Base Building" },
-  { label: "Weeks 3–4", desc: "Add Intervals" },
-  { label: "Weeks 5–8", desc: "Build Strength" },
-  { label: "Weeks 8–12", desc: "Peak Progress" },
-];
+// Re-evaluate "today" when the app stays open past midnight or returns from the background.
+function useToday() {
+  const [today, setToday] = useState(todayISO);
+  useEffect(() => {
+    const refresh = () => setToday(todayISO());
+    const interval = setInterval(refresh, 60000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+  return today;
+}
 
-const EXERCISES = {
-  "Banded Chest Press": {
-    emoji: "🏋️",
-    muscle: "Chest",
-    sets: "3 × 12–15",
-    setup: "Anchor band at mid-back height behind you or loop around a sturdy post.",
-    steps: [
-      "Stand with feet shoulder-width apart, slight bend in knees.",
-      "Hold handles at chest level, elbows out at roughly 45°.",
-      "Press forward until arms are nearly straight — don't lock elbows.",
-      "Slowly return to start. Control the band on the way back.",
-    ],
-    cues: ["Keep chest up, don't hunch forward", "Squeeze chest at full extension", "Breathe out on the press"],
-    shoulderNote: "Keep elbows at 45° — not flared wide. Protects the shoulder joint.",
-  },
-  "Banded Chest Fly": {
-    emoji: "🦅",
-    muscle: "Chest / Inner Chest",
-    sets: "3 × 12–15",
-    setup: "Anchor band behind you at shoulder height. One handle in each hand.",
-    steps: [
-      "Stand tall, arms extended out to sides, slight bend in elbows.",
-      "Bring hands together in front of your chest in a hugging arc.",
-      "Squeeze chest hard at the center.",
-      "Slowly open arms back to start position.",
-    ],
-    cues: ["Think 'hugging a big tree'", "Keep a soft bend in elbows throughout", "Don't let arms go behind your body line"],
-    shoulderNote: "Stop if you feel pulling in front of shoulder. Reduce range of motion if needed.",
-  },
-  "Banded Row": {
-    emoji: "🚣",
-    muscle: "Upper Back / Posture",
-    sets: "3 × 12–15",
-    setup: "Anchor band in front of you at waist height. Stand or sit facing anchor.",
-    steps: [
-      "Hold handles, arms extended, slight lean back.",
-      "Pull handles to your waist, driving elbows back behind you.",
-      "Squeeze shoulder blades together at the end.",
-      "Slowly extend arms back to start.",
-    ],
-    cues: ["Lead with elbows, not hands", "Keep back straight — don't round forward", "Shoulders stay down, away from ears"],
-    shoulderNote: "Great for shoulder health. Keep movement controlled — no jerking.",
-  },
-  "Banded Pull-Aparts": {
-    emoji: "↔️",
-    muscle: "Rear Deltoids / Posture",
-    sets: "3 × 15",
-    setup: "Hold band with both hands in front of you at chest height, hands shoulder-width apart.",
-    steps: [
-      "Stand tall, arms straight at chest level holding band.",
-      "Pull band apart horizontally, spreading arms wide.",
-      "Bring shoulder blades together at full stretch.",
-      "Slowly return hands to center.",
-    ],
-    cues: ["Keep arms at chest height — not drifting up or down", "Full stretch = hands past your sides", "Light band — this is a posture move, not a power move"],
-    shoulderNote: "One of the safest shoulder exercises. Great for fixing posture and reducing chest fat appearance.",
-  },
-  "Modified Push-Ups": {
-    emoji: "💪",
-    muscle: "Chest / Triceps / Core",
-    sets: "3 × 8–12",
-    setup: "No equipment. Find a clear floor space.",
-    steps: [
-      "Start on hands and knees. Walk hands forward until body is at an angle.",
-      "Lower chest toward floor, elbows at 45° angle from body.",
-      "Push back up to start without locking elbows.",
-      "Build toward full push-up over 4–6 weeks.",
-    ],
-    cues: ["Don't let hips sag or pike up", "Look slightly ahead, not straight down", "Full range: chest nearly touches floor"],
-    shoulderNote: "Knee version keeps shoulder load manageable. Progress to full push-up when ready.",
-  },
-  "Banded Bicep Curls": {
-    emoji: "🦾",
-    muscle: "Biceps",
-    sets: "3 × 12–15",
-    setup: "Stand on center of band, one handle in each hand, palms facing forward.",
-    steps: [
-      "Start with arms at sides, palms facing up.",
-      "Curl hands toward shoulders, keeping elbows pinned to sides.",
-      "Squeeze biceps at the top.",
-      "Slowly lower back to start.",
-    ],
-    cues: ["Elbows stay still — only forearms move", "Don't swing or lean back", "Full extension at the bottom"],
-    shoulderNote: "Safe for both shoulder and elbow. Keep it controlled.",
-  },
-  "Banded Tricep Pressdowns": {
-    emoji: "⬇️",
-    muscle: "Triceps",
-    sets: "3 × 12–15",
-    setup: "Anchor band above head height (door, pull-up bar). Hold handle with both hands.",
-    steps: [
-      "Stand facing anchor, elbows bent at sides at 90°.",
-      "Press handles down until arms are straight.",
-      "Squeeze triceps at the bottom.",
-      "Slowly return to 90°.",
-    ],
-    cues: ["Keep elbows pinned to your sides — they don't move", "Don't lean forward excessively", "Controlled tempo — 2 sec down, 2 sec up"],
-    shoulderNote: "Elbow stays stable. Very low shoulder stress.",
-  },
-  "Banded Lateral Raises": {
-    emoji: "🙌",
-    muscle: "Side Deltoids",
-    sets: "3 × 12",
-    setup: "Stand on center of band, handle in each hand at sides.",
-    steps: [
-      "Start with hands at sides, slight bend in elbows.",
-      "Raise arms out to the sides up to shoulder height — no higher.",
-      "Hold briefly at the top.",
-      "Slowly lower back to sides.",
-    ],
-    cues: ["Lead with elbows, not hands", "Stop at shoulder height — going higher stresses the joint", "Use lightest band available"],
-    shoulderNote: "⚠️ Stop immediately if right shoulder aches. Reduce range of motion to pain-free zone only.",
-  },
-  "Banded Front Raises": {
-    emoji: "⬆️",
-    muscle: "Front Deltoids",
-    sets: "3 × 12",
-    setup: "Stand on center of band, both hands holding one handle or handles together.",
-    steps: [
-      "Start with hands in front of thighs, palms facing down.",
-      "Raise arms forward to shoulder height.",
-      "Hold briefly.",
-      "Slowly lower back down.",
-    ],
-    cues: ["Keep core tight — don't arch your lower back", "Stop at shoulder height", "Slight bend in elbows throughout"],
-    shoulderNote: "⚠️ Same caution as lateral raises. Pain-free range only for right shoulder.",
-  },
-  "Plank Hold (3 × 30s)": {
-    emoji: "🧱",
-    muscle: "Core / Posture",
-    sets: "3 × 20–30 sec",
-    setup: "No equipment. Floor space.",
-    steps: [
-      "Start on forearms and toes (or knees to modify).",
-      "Body forms a straight line from head to heels.",
-      "Hold position, breathing steadily.",
-      "Don't let hips sag or rise.",
-    ],
-    cues: ["Squeeze glutes and abs the whole time", "Look down at the floor — neutral neck", "Breathe. Don't hold your breath."],
-    shoulderNote: "Keep forearms on floor — takes pressure off shoulder vs. straight-arm plank.",
-  },
-};
+// Timestamp-based so it stays accurate when the phone locks or the tab is throttled.
+function useStopwatch() {
+  const [state, setState] = useState({ running: false, startedAt: 0, base: 0 });
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!state.running) return undefined;
+    const id = setInterval(() => setTick((t) => t + 1), 250);
+    return () => clearInterval(id);
+  }, [state.running]);
+  const elapsed = state.base + (state.running ? Date.now() - state.startedAt : 0);
+  const toggle = () => setState((s) => (s.running
+    ? { running: false, startedAt: 0, base: s.base + Date.now() - s.startedAt }
+    : { running: true, startedAt: Date.now(), base: s.base }));
+  const reset = () => setState({ running: false, startedAt: 0, base: 0 });
+  return { running: state.running, seconds: Math.floor(elapsed / 1000), toggle, reset };
+}
 
-const ROUTINES = [
-  {
-    id: "mon-fri",
-    label: "Monday & Friday",
-    tag: "Full Session",
-    tagColor: BRAND.gold,
-    tagTextColor: "#1A1A1A",
-    icon: "🔥",
-    desc: "Chest, back, and posture. Primary fat-burning and toning session.",
-    spin: { time: "20–45 min" },
-    exercises: [
-      { name: "Banded Chest Press", sets: "3 × 12–15" },
-      { name: "Banded Chest Fly", sets: "3 × 12–15" },
-      { name: "Banded Row", sets: "3 × 12–15" },
-      { name: "Banded Pull-Aparts", sets: "3 × 15" },
-      { name: "Modified Push-Ups", sets: "3 × 8–12" },
-    ],
-    rest: "60–90 sec between sets",
-    notes: "Rest 2–3 min between spin and bands. Hydrate.",
-  },
-  {
-    id: "wed",
-    label: "Wednesday",
-    tag: "Light Session",
-    tagColor: BRAND.goldDim,
-    tagTextColor: "#fff",
-    icon: "⚡",
-    desc: "Arms, shoulders, and core. Active recovery — lighter load.",
-    spin: { time: "20–45 min" },
-    exercises: [
-      { name: "Banded Bicep Curls", sets: "3 × 12–15" },
-      { name: "Banded Tricep Pressdowns", sets: "3 × 12–15" },
-      { name: "Banded Lateral Raises", sets: "3 × 12" },
-      { name: "Banded Front Raises", sets: "3 × 12" },
-      { name: "Plank Hold (3 × 30s)", sets: "3 × 20–30 sec" },
-    ],
-    rest: "60 sec between sets",
-    notes: "Lighter resistance on shoulders. Stop if anything hurts.",
-  },
-  {
-    id: "rest",
-    label: "Tue / Thu / Sat / Sun",
-    tag: "Rest Day",
-    tagColor: "#444",
-    tagTextColor: "#bbb",
-    icon: "🚶",
-    desc: "Full rest or light walk. Let the body repair and grow.",
-    spin: null,
-    exercises: [],
-    rest: null,
-    notes: "Light 15–20 min walk is fine. No bands. No spin.",
-  },
-];
+const fmtTimer = (sec) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
 
-const SCHEDULE = [
-  { day: "MON", label: "Monday", type: "full", focus: "Spin + Chest/Back", spin: true, bands: ["Banded Chest Press","Banded Chest Fly","Banded Row","Banded Pull-Aparts","Modified Push-Ups"], color: BRAND.gold },
-  { day: "TUE", label: "Tuesday", type: "rest", focus: "Rest / Light Walk", spin: false, bands: [], color: "#444" },
-  { day: "WED", label: "Wednesday", type: "light", focus: "Spin + Active Recovery", spin: true, bands: ["Banded Bicep Curls","Banded Tricep Pressdowns","Banded Lateral Raises","Banded Front Raises","Plank Hold (3 × 30s)"], color: BRAND.goldDim },
-  { day: "THU", label: "Thursday", type: "rest", focus: "Rest / Light Walk", spin: false, bands: [], color: "#444" },
-  { day: "FRI", label: "Friday", type: "full", focus: "Spin + Chest/Back", spin: true, bands: ["Banded Chest Press","Banded Chest Fly","Banded Row","Banded Pull-Aparts","Modified Push-Ups"], color: BRAND.gold },
-  { day: "SAT", label: "Saturday", type: "rest", focus: "Rest / Light Walk", spin: false, bands: [], color: "#444" },
-  { day: "SUN", label: "Sunday", type: "rest", focus: "Full Rest", spin: false, bands: [], color: "#333" },
-];
+function weekSessions(log, weekStart) {
+  let done = 0;
+  for (let i = 0; i < 7; i += 1) if (isSessionComplete(log, addDays(weekStart, i))) done += 1;
+  return done;
+}
 
-const SPIN_PHASES = [
-  { weeks: "Wks 1–2", intervals: false, desc: "5 min warm-up → 10 min moderate → 5 min cool down", total: "20 min" },
-  { weeks: "Wks 3–4", intervals: true, desc: "5 min warm-up → 6 rounds (1 min hard / 2 min easy) → 5 min cool down", total: "~26 min" },
-  { weeks: "Wks 5+", intervals: true, desc: "Build to 30–45 min. Increase intensity or add steady-state time.", total: "30–45 min" },
-];
+function SectionHead({ eyebrow, title, children }) {
+  return (
+    <div className="section-head">
+      {eyebrow && <div className="eyebrow">{eyebrow}</div>}
+      <h1 className="title">{title}</h1>
+      {children}
+    </div>
+  );
+}
 
-const todayIndex = new Date().getDay();
-const dayMap = [6, 0, 1, 2, 3, 4, 5];
-function getKey(wo, di) { return `session_w${wo}_d${di}`; }
+function FormBtn({ name, onOpen }) {
+  return <button type="button" className="tag-btn" onClick={() => onOpen(name)} aria-label={`Form guide: ${name}`}>Form</button>;
+}
 
-const TABS = [["today","Today"],["week","Week"],["routines","Routines"],["form","Form"],["spin","Spin"],["notes","Notes"]];
-
-const s = { fontSize: 13, color: "#bbb", lineHeight: 1.7 };
+function Check({ checked, onToggle, label }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={checked} aria-label={label} className="check" onClick={onToggle}>
+      {checked && <Icon name="check" size={14} strokeWidth={3} />}
+    </button>
+  );
+}
 
 function FormDetail({ exName, onBack }) {
   const ex = EXERCISES[exName];
   return (
-    <div style={{ minHeight: "100vh", background: BRAND.dark, color: BRAND.white, fontFamily: "'Georgia', serif", maxWidth: 480, margin: "0 auto" }}>
-      <div style={{ background: BRAND.charcoal, padding: "16px 20px", borderBottom: `2px solid ${BRAND.gold}`, display: "flex", alignItems: "center", gap: 12 }}>
-        <button onClick={onBack} style={{ background: "none", border: "none", color: BRAND.gold, fontSize: 22, cursor: "pointer", padding: 0 }}>←</button>
-        <div>
-          <div style={{ fontSize: 10, color: "#888", letterSpacing: 2, textTransform: "uppercase" }}>Form Guide</div>
-          <div style={{ fontSize: 17, fontWeight: "bold" }}>{ex.emoji} {exName}</div>
+    <div className="app">
+      <div className="header" style={{ paddingBottom: "var(--space-3)" }}>
+        <div className="brand">
+          <button type="button" className="btn btn-ghost btn-icon" onClick={onBack} aria-label="Back">
+            <Icon name="chevronLeft" size={22} />
+          </button>
+          <div className="brand-text">
+            <div className="eyebrow">Form guide</div>
+            <div className="brand-title">{exName}</div>
+          </div>
         </div>
       </div>
-      <div style={{ padding: 20 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-          <span style={{ padding: "4px 12px", background: BRAND.goldDim, borderRadius: 20, fontSize: 11, letterSpacing: 1 }}>{ex.muscle}</span>
-          <span style={{ padding: "4px 12px", background: "#333", borderRadius: 20, fontSize: 11, color: "#bbb" }}>{ex.sets}</span>
+      <div className="page stack">
+        <div style={{ display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          <span className="badge badge-navy">{ex.muscle}</span>
+          <span className="badge badge-neutral">{ex.sets}</span>
         </div>
-        <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 16, marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: BRAND.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>Setup</div>
-          <div style={s}>{ex.setup}</div>
+        <div className="card">
+          <div className="eyebrow" style={{ marginBottom: "var(--space-2)" }}>Setup</div>
+          <p className="body">{ex.setup}</p>
         </div>
-        <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 16, marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: BRAND.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 }}>Steps</div>
+        <div className="card">
+          <div className="eyebrow" style={{ marginBottom: "var(--space-3)" }}>Steps</div>
           {ex.steps.map((step, i) => (
-            <div key={i} style={{ display: "flex", gap: 12, marginBottom: 10 }}>
-              <div style={{ width: 22, height: 22, borderRadius: "50%", background: BRAND.goldDim, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: "bold", flexShrink: 0, color: BRAND.dark }}>{i + 1}</div>
-              <div style={s}>{step}</div>
+            <div key={step} style={{ display: "flex", gap: "var(--space-3)", marginBottom: "var(--space-3)" }}>
+              <div className="step-num">{i + 1}</div>
+              <p className="body">{step}</p>
             </div>
           ))}
         </div>
-        <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 16, marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: BRAND.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 }}>Coaching Cues</div>
-          {ex.cues.map((cue, i) => (
-            <div key={i} style={{ display: "flex", gap: 10, marginBottom: 8 }}>
-              <span style={{ color: BRAND.gold, flexShrink: 0 }}>›</span>
-              <div style={s}>{cue}</div>
+        <div className="card">
+          <div className="eyebrow" style={{ marginBottom: "var(--space-3)" }}>Coaching cues</div>
+          {ex.cues.map((cue) => (
+            <div key={cue} style={{ display: "flex", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+              <Icon name="chevronRight" size={16} style={{ color: "var(--color-accent-strong)", marginTop: 4 }} />
+              <p className="body">{cue}</p>
             </div>
           ))}
         </div>
-        <div style={{ padding: "12px 16px", background: "#2a1a0a", border: `1px solid ${BRAND.warn}`, borderRadius: 10, fontSize: 12, color: BRAND.warn }}>
-          ⚠️ Shoulder Note: {ex.shoulderNote}
+        <div className="alert alert-warn">
+          <Icon name="alert" />
+          <div><strong>Shoulder note:</strong> {ex.shoulderNote}</div>
         </div>
       </div>
     </div>
@@ -286,116 +125,218 @@ function FormDetail({ exName, onBack }) {
 }
 
 export default function App() {
+  const [data, setData] = useState(loadState);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [persisted, setPersisted] = useState(false);
   const [tab, setTab] = useState("today");
-  const [weekOffset, setWeekOffset] = useState(0);
-  const [completed, setCompleted] = useState(() => { try { return JSON.parse(localStorage.getItem("hcpa_fitness") || "{}"); } catch { return {}; } });
-  const [spinPhase, setSpinPhase] = useState(0);
-  const [notes, setNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("hcpa_notes") || "{}"); } catch { return {}; } });
-  const [noteInput, setNoteInput] = useState("");
-  const [timerRunning, setTimerRunning] = useState(false);
-  const [timerVal, setTimerVal] = useState(0);
   const [selectedExercise, setSelectedExercise] = useState(null);
+  const [spinView, setSpinView] = useState(null);
+  const [noteInput, setNoteInput] = useState("");
+  const [importMsg, setImportMsg] = useState(null);
+  const [updateReady, setUpdateReady] = useState(false);
+  const fileInput = useRef(null);
 
-  useEffect(() => { localStorage.setItem("hcpa_fitness", JSON.stringify(completed)); }, [completed]);
-  useEffect(() => { localStorage.setItem("hcpa_notes", JSON.stringify(notes)); }, [notes]);
+  const today = useToday();
+  const thisWeek = startOfWeek(today);
+  const [weekStart, setWeekStart] = useState(thisWeek);
+  const timer = useStopwatch();
+
+  useEffect(() => { setSaveFailed(!saveState(data)); }, [data]);
+  useEffect(() => { requestPersistentStorage().then(setPersisted); }, []);
   useEffect(() => {
-    let interval;
-    if (timerRunning) interval = setInterval(() => setTimerVal(v => v + 1), 1000);
-    return () => clearInterval(interval);
-  }, [timerRunning]);
+    const onUpdate = () => setUpdateReady(true);
+    window.addEventListener("sw-update-ready", onUpdate);
+    return () => window.removeEventListener("sw-update-ready", onUpdate);
+  }, []);
 
-  const toggleComplete = (key) => setCompleted(prev => ({ ...prev, [key]: !prev[key] }));
-  const weekSessions = SCHEDULE.filter(d => d.type !== "rest");
-  const totalPossible = weekSessions.length;
-  const weekCompleted = weekSessions.filter((_, i) => completed[getKey(weekOffset, SCHEDULE.indexOf(weekSessions[i]))]).length;
-  const fmt = (sec) => `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
-  const todaySchedule = SCHEDULE[dayMap[todayIndex]];
-  const totalSessions = Object.values(completed).filter(Boolean).length;
-  const pct = Math.round((weekCompleted / totalPossible) * 100);
+  const { log } = data;
+  const currentProgramWeek = programWeek(data.programStart, today);
+  const currentSpinPhase = spinPhaseForWeek(currentProgramWeek);
+  const totalSessions = useMemo(() => completedDates(log).length, [log]);
+
+  const updateEntry = useCallback((iso, fn) => {
+    setData((prev) => {
+      const next = fn({ ...(prev.log[iso] || {}) });
+      const nextLog = { ...prev.log };
+      if (next && Object.keys(next).length) nextLog[iso] = next;
+      else delete nextLog[iso];
+      return { ...prev, log: nextLog };
+    });
+  }, []);
+
+  const toggleSpin = (iso) => updateEntry(iso, (e) => {
+    if (e.spin) delete e.spin; else e.spin = true;
+    return e;
+  });
+  const toggleExercise = (iso, name) => updateEntry(iso, (e) => {
+    const ex = { ...(e.ex || {}) };
+    if (ex[name]) delete ex[name]; else ex[name] = true;
+    if (Object.keys(ex).length) e.ex = ex; else delete e.ex;
+    return e;
+  });
+  // Logging a whole day from the Week tab; un-logging clears that day.
+  const toggleDay = (iso) => updateEntry(iso, (e) => (isSessionComplete(log, iso) ? null : { ...e, done: true }));
+
   const saveNote = () => {
-    if (!noteInput.trim()) return;
-    const key = new Date().toLocaleDateString();
-    setNotes(prev => ({ ...prev, [key]: [...(prev[key] || []), noteInput.trim()] }));
+    const text = noteInput.trim();
+    if (!text) return;
+    setData((prev) => ({ ...prev, notes: [...prev.notes, { id: newNoteId(), date: todayISO(), text, createdAt: new Date().toISOString() }] }));
     setNoteInput("");
+  };
+  const deleteNote = (id) => {
+    if (!window.confirm("Delete this note?")) return;
+    setData((prev) => ({ ...prev, notes: prev.notes.filter((n) => n.id !== id) }));
+  };
+
+  const handleExport = () => {
+    const stamped = { ...data, lastBackup: new Date().toISOString() };
+    exportBackup(stamped);
+    setData(stamped);
+  };
+  const handleImport = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const { state, added } = mergeBackup(data, await file.text());
+      setData(state);
+      setImportMsg({ ok: true, text: `Backup restored: ${added.days} logged days checked, ${added.notes} new notes added.` });
+    } catch (err) {
+      setImportMsg({ ok: false, text: err.message });
+    }
   };
 
   if (selectedExercise) return <FormDetail exName={selectedExercise} onBack={() => setSelectedExercise(null)} />;
 
-  const FormBtn = ({ name }) => (
-    <button onClick={() => setSelectedExercise(name)} style={{ padding: "3px 10px", background: "none", border: `1px solid ${BRAND.goldDim}`, borderRadius: 20, color: BRAND.gold, fontSize: 10, cursor: "pointer", letterSpacing: 1, flexShrink: 0 }}>FORM</button>
-  );
+  const todayPlan = planFor(today);
+  const todayEntry = log[today] || {};
+  const todayDone = isSessionComplete(log, today);
+  const todayProgress = sessionProgress(log, today);
+
+  const viewedWeek = programWeek(data.programStart, weekStart);
+  const viewedDone = weekSessions(log, weekStart);
+  const pct = Math.round((viewedDone / SESSIONS_PER_WEEK) * 100);
+
+  const earliestLogged = Object.keys(log).sort()[0];
+  const historyStart = startOfWeek(earliestLogged && earliestLogged < data.programStart ? earliestLogged : data.programStart);
+  const historyWeeks = [];
+  for (let w = thisWeek; w >= historyStart; w = addDays(w, -7)) historyWeeks.push(w);
+  const fullWeeks = historyWeeks.filter((w) => weekSessions(log, w) >= SESSIONS_PER_WEEK).length;
+
+  const daysSinceBackup = data.lastBackup ? Math.floor((Date.now() - new Date(data.lastBackup).getTime()) / 86400000) : null;
+  const hasData = totalSessions > 0 || data.notes.length > 0;
+  const backupDue = hasData && (daysSinceBackup === null || daysSinceBackup >= BACKUP_REMINDER_DAYS);
+
+  const notesByDate = data.notes.reduce((acc, n) => {
+    (acc[n.date] = acc[n.date] || []).push(n);
+    return acc;
+  }, {});
+  const noteDates = Object.keys(notesByDate).sort().reverse();
+
+  const shownSpin = spinView ?? currentSpinPhase;
 
   return (
-    <div style={{ minHeight: "100vh", background: BRAND.dark, color: BRAND.white, fontFamily: "'Georgia', serif", maxWidth: 480, margin: "0 auto" }}>
-      {/* Header */}
-      <div style={{ background: BRAND.charcoal, padding: "16px 20px 0", borderBottom: `2px solid ${BRAND.gold}` }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <div style={{ width: 8, height: 28, background: BRAND.gold, borderRadius: 2 }} />
-          <div>
-            <div style={{ fontSize: 10, letterSpacing: 3, color: BRAND.gold, textTransform: "uppercase" }}>Heyward CPA</div>
-            <div style={{ fontSize: 18, fontWeight: "bold", letterSpacing: 1 }}>Upper Body Tracker</div>
-          </div>
-          <div style={{ marginLeft: "auto", textAlign: "right" }}>
-            <div style={{ fontSize: 10, color: "#888" }}>Sessions</div>
-            <div style={{ fontSize: 22, color: BRAND.gold, fontWeight: "bold" }}>{totalSessions}</div>
-          </div>
+    <div className="app">
+      {updateReady && (
+        <div className="banner" role="status">
+          <Icon name="refresh" />
+          <span>A new version is ready.</span>
+          <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>Refresh</button>
         </div>
-        <div style={{ display: "flex", overflowX: "auto", scrollbarWidth: "none", marginTop: 10 }}>
-          {TABS.map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} style={{ flexShrink: 0, padding: "10px 14px", border: "none", background: "transparent", color: tab === id ? BRAND.gold : "#666", fontFamily: "inherit", fontSize: 11, letterSpacing: 1, cursor: "pointer", borderBottom: tab === id ? `2px solid ${BRAND.gold}` : "2px solid transparent", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</button>
-          ))}
-        </div>
-      </div>
+      )}
 
-      <div style={{ padding: 20 }}>
+      <header className="header">
+        <div className="brand">
+          <img className="brand-mark" src={`${process.env.PUBLIC_URL}/brand/semaj-mark.png`} alt="" />
+          <div className="brand-text">
+            <img className="brand-wordmark" src={`${process.env.PUBLIC_URL}/brand/semaj-wordmark.png`} alt="SEMAJ Media" />
+            <div className="brand-title">Upper Body Tracker</div>
+          </div>
+          <div className="brand-stat">
+            <div className="eyebrow">Sessions</div>
+            <div className="brand-stat-value">{totalSessions}</div>
+          </div>
+        </div>
+        <nav className="tabs" role="tablist" aria-label="Sections">
+          {TABS.map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} className="tab" onClick={() => setTab(id)}>{label}</button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="page">
+        {saveFailed && (
+          <div className="alert alert-warn" style={{ marginBottom: "var(--space-4)" }}>
+            <Icon name="alert" />
+            <div>This browser is blocking storage, so changes won't be saved. Export a backup from History before closing.</div>
+          </div>
+        )}
 
         {/* TODAY */}
         {tab === "today" && (
-          <div>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase" }}>Today</div>
-              <div style={{ fontSize: 22, fontWeight: "bold", color: BRAND.gold }}>{todaySchedule.focus}</div>
-              <span style={{ display: "inline-block", marginTop: 6, padding: "3px 10px", background: todaySchedule.type === "rest" ? "#333" : BRAND.goldDim, borderRadius: 20, fontSize: 10, letterSpacing: 2, textTransform: "uppercase" }}>
-                {todaySchedule.type === "rest" ? "Rest Day" : todaySchedule.type === "full" ? "Full Session" : "Light Session"}
-              </span>
-            </div>
-            {todaySchedule.type !== "rest" ? (
+          <div className="stack">
+            <SectionHead eyebrow={formatLong(today)} title={todayPlan.focus}>
+              <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)", flexWrap: "wrap" }}>
+                <span className={`badge ${todayPlan.type === "rest" ? "badge-neutral" : "badge-navy"}`}>{TYPE_LABEL[todayPlan.type]}</span>
+                {currentProgramWeek >= 1 && <span className="badge badge-info">Program week {currentProgramWeek}</span>}
+              </div>
+            </SectionHead>
+
+            {currentProgramWeek < 1 && (
+              <div className="alert alert-info">
+                <Icon name="info" />
+                <div>Your program starts {formatLong(data.programStart)}. Change the start date in History.</div>
+              </div>
+            )}
+
+            {todayPlan.type !== "rest" ? (
               <>
-                <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 16, marginBottom: 12, border: `1px solid ${BRAND.goldDim}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <div style={{ fontSize: 13, letterSpacing: 1, textTransform: "uppercase", color: BRAND.gold }}>🚴 Spin Bike</div>
-                    <button onClick={() => toggleComplete(getKey(weekOffset, dayMap[todayIndex]) + "_spin")} style={{ padding: "5px 14px", borderRadius: 20, border: "none", background: completed[getKey(weekOffset, dayMap[todayIndex]) + "_spin"] ? BRAND.success : "#444", color: BRAND.white, fontSize: 11, cursor: "pointer" }}>
-                      {completed[getKey(weekOffset, dayMap[todayIndex]) + "_spin"] ? "✓ Done" : "Mark Done"}
+                {todayDone && (
+                  <div className="alert alert-success" role="status">
+                    <Icon name="check" />
+                    <div><strong>Session complete.</strong> Saved to your history.</div>
+                  </div>
+                )}
+                <section className="card">
+                  <div className="card-head">
+                    <div className="card-title"><Icon name="bike" /> Spin bike</div>
+                    <button type="button" className={`btn btn-sm ${todayEntry.spin ? "btn-success" : "btn-secondary"}`} onClick={() => toggleSpin(today)} aria-pressed={!!todayEntry.spin}>
+                      {todayEntry.spin ? <><Icon name="check" size={14} /> Done</> : "Mark done"}
                     </button>
                   </div>
-                  <div style={s}>{SPIN_PHASES[spinPhase].desc}</div>
-                  <div style={{ marginTop: 6, fontSize: 11, color: BRAND.gold }}>{SPIN_PHASES[spinPhase].total}</div>
-                </div>
-                <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 16, border: "1px solid #3a3a3a" }}>
-                  <div style={{ fontSize: 13, letterSpacing: 1, textTransform: "uppercase", color: BRAND.gold, marginBottom: 12 }}>💪 Resistance Bands — 3 × 12–15</div>
-                  {todaySchedule.bands.map((ex, i) => {
-                    const key = getKey(weekOffset, dayMap[todayIndex]) + `_ex${i}`;
+                  <p className="body">{SPIN_PHASES[currentSpinPhase].desc}</p>
+                  <div className="muted" style={{ marginTop: "var(--space-1)" }}>{SPIN_PHASES[currentSpinPhase].weeks} · {SPIN_PHASES[currentSpinPhase].total}</div>
+                </section>
+                <section className="card">
+                  <div className="card-head" style={{ marginBottom: 0 }}>
+                    <div className="card-title"><Icon name="dumbbell" /> Resistance bands</div>
+                    <span className="muted">{todayProgress.done}/{todayProgress.total} done</span>
+                  </div>
+                  {todayPlan.bands.map((name) => {
+                    const checked = !!(todayEntry.ex && todayEntry.ex[name]);
                     return (
-                      <div key={ex} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: i < todaySchedule.bands.length - 1 ? "1px solid #3a3a3a" : "none" }}>
-                        <div onClick={() => toggleComplete(key)} style={{ width: 22, height: 22, borderRadius: "50%", border: `2px solid ${completed[key] ? BRAND.success : BRAND.goldDim}`, background: completed[key] ? BRAND.success : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer", transition: "all 0.2s" }}>
-                          {completed[key] && <span style={{ fontSize: 11 }}>✓</span>}
-                        </div>
-                        <div onClick={() => toggleComplete(key)} style={{ flex: 1, fontSize: 14, color: completed[key] ? "#666" : BRAND.white, textDecoration: completed[key] ? "line-through" : "none", cursor: "pointer" }}>{ex}</div>
-                        <FormBtn name={ex} />
+                      <div key={name} className="list-row">
+                        <Check checked={checked} onToggle={() => toggleExercise(today, name)} label={name} />
+                        <button type="button" className={`check-label ${checked ? "done" : ""}`} onClick={() => toggleExercise(today, name)}>
+                          {name}
+                          <span className="muted" style={{ display: "block", textDecoration: "none" }}>{EXERCISES[name].sets}</span>
+                        </button>
+                        <FormBtn name={name} onOpen={setSelectedExercise} />
                       </div>
                     );
                   })}
-                </div>
-                <div style={{ marginTop: 12, padding: "10px 14px", background: "#2a1a0a", border: `1px solid ${BRAND.warn}`, borderRadius: 8, fontSize: 12, color: BRAND.warn }}>
-                  ⚠️ Stop immediately if right shoulder hurts. Pain ≠ progress.
+                </section>
+                <div className="alert alert-warn">
+                  <Icon name="alert" />
+                  <div>Stop immediately if right shoulder hurts. Pain ≠ progress.</div>
                 </div>
               </>
             ) : (
-              <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 30, textAlign: "center", border: "1px solid #333" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>😴</div>
-                <div style={{ fontSize: 16, color: "#888" }}>Rest & recover today.</div>
-                <div style={{ fontSize: 13, color: "#555", marginTop: 6 }}>Light walk optional.</div>
-              </div>
+              <section className="card" style={{ textAlign: "center", padding: "var(--space-8) var(--space-4)" }}>
+                <Icon name="moon" size={36} style={{ color: "var(--color-brand-primary)" }} />
+                <div className="subtitle" style={{ marginTop: "var(--space-3)" }}>Rest and recover today.</div>
+                <p className="muted" style={{ marginTop: "var(--space-1)" }}>A light 15–20 minute walk is optional.</p>
+              </section>
             )}
           </div>
         )}
@@ -403,221 +344,311 @@ export default function App() {
         {/* WEEK */}
         {tab === "week" && (
           <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <button onClick={() => setWeekOffset(w => Math.max(0, w - 1))} style={{ background: "#333", border: "none", color: BRAND.white, padding: "6px 14px", borderRadius: 20, cursor: "pointer" }}>← Prev</button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-3)" }}>
+              <button type="button" className="btn btn-secondary btn-icon" onClick={() => setWeekStart((w) => addDays(w, -7))} aria-label="Previous week">
+                <Icon name="chevronLeft" />
+              </button>
               <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 13, color: BRAND.gold }}>Week {weekOffset + 1}</div>
-                <div style={{ fontSize: 11, color: "#666" }}>{weekCompleted}/{totalPossible} sessions</div>
+                <div className="subtitle">{viewedWeek >= 1 ? `Program week ${viewedWeek}` : "Before program"}</div>
+                <div className="muted">{formatWeekRange(weekStart)} · {viewedDone}/{SESSIONS_PER_WEEK} sessions</div>
               </div>
-              <button onClick={() => setWeekOffset(w => w + 1)} style={{ background: "#333", border: "none", color: BRAND.white, padding: "6px 14px", borderRadius: 20, cursor: "pointer" }}>Next →</button>
+              <button type="button" className="btn btn-secondary btn-icon" onClick={() => setWeekStart((w) => addDays(w, 7))} disabled={weekStart >= thisWeek} aria-label="Next week">
+                <Icon name="chevronRight" />
+              </button>
             </div>
-            <div style={{ height: 6, background: "#333", borderRadius: 3, marginBottom: 18, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${pct}%`, background: BRAND.gold, borderRadius: 3, transition: "width 0.4s" }} />
+            {weekStart !== thisWeek && (
+              <div style={{ textAlign: "center", marginBottom: "var(--space-3)" }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setWeekStart(thisWeek)}>Back to this week</button>
+              </div>
+            )}
+            <div className="progress" style={{ marginBottom: "var(--space-4)" }} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Sessions this week">
+              <div style={{ width: `${pct}%` }} />
             </div>
-            {SCHEDULE.map((day, idx) => {
-              const key = getKey(weekOffset, idx);
-              const isDone = completed[key];
-              const isToday = idx === dayMap[todayIndex] && weekOffset === 0;
-              return (
-                <div key={day.day} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", marginBottom: 8, background: isToday ? "#2a2510" : BRAND.charcoal, borderRadius: 10, border: `1px solid ${isToday ? BRAND.gold : "#333"}` }}>
-                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: day.type === "rest" ? "#333" : isDone ? BRAND.success : day.color, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: "bold", flexShrink: 0, color: BRAND.dark }}>
-                    {isDone ? "✓" : day.day}
+            <div className="stack">
+              {SCHEDULE.map((day, idx) => {
+                const iso = addDays(weekStart, idx);
+                const isDone = isSessionComplete(log, iso);
+                const isToday = iso === today;
+                const isFuture = iso > today;
+                const prog = sessionProgress(log, iso);
+                return (
+                  <div key={day.day} className={`card ${isToday ? "highlight" : ""}`} style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: isToday ? undefined : "var(--space-3) var(--space-4)" }}>
+                    <div className={`day-dot ${day.type === "rest" ? "" : isDone ? "done" : "train"}`}>
+                      {isDone ? <Icon name="check" size={18} strokeWidth={3} /> : day.day}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>{day.label} <span className="muted" style={{ fontWeight: 400 }}>· {formatShort(iso)}{isToday ? " · Today" : ""}</span></div>
+                      <div className="muted">
+                        {day.focus}
+                        {day.type !== "rest" && !isDone && prog.done > 0 && ` · ${prog.done}/${prog.total} items`}
+                      </div>
+                    </div>
+                    {day.type !== "rest" && (
+                      <button type="button" className={`btn btn-sm ${isDone ? "btn-success" : "btn-secondary"}`} onClick={() => toggleDay(iso)} disabled={isFuture} aria-pressed={isDone}>
+                        {isDone ? "Logged" : "Log"}
+                      </button>
+                    )}
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: "bold" }}>{day.label}</div>
-                    <div style={{ fontSize: 12, color: "#888" }}>{day.focus}</div>
-                  </div>
-                  {day.type !== "rest" && (
-                    <button onClick={() => toggleComplete(key)} style={{ padding: "4px 12px", borderRadius: 20, border: "none", background: isDone ? BRAND.success : "#444", color: BRAND.white, fontSize: 11, cursor: "pointer" }}>
-                      {isDone ? "✓" : "Log"}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-            <div style={{ marginTop: 20 }}>
-              <div style={{ fontSize: 11, letterSpacing: 2, color: "#666", textTransform: "uppercase", marginBottom: 10 }}>Progress Phases</div>
-              {WEEKS.map((w, i) => (
-                <div key={w.label} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: "1px solid #2a2a2a" }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: i <= Math.min(weekOffset / 2, 3) ? BRAND.gold : "#444", flexShrink: 0 }} />
-                  <span style={{ fontSize: 13, color: BRAND.gold }}>{w.label}</span>
-                  <span style={{ fontSize: 12, color: "#888" }}>{w.desc}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
+            <div style={{ marginTop: "var(--space-6)" }}>
+              <div className="eyebrow" style={{ marginBottom: "var(--space-2)" }}>Progress phases</div>
+              <div className="card" style={{ padding: "0 var(--space-4)" }}>
+                {PHASES.map((p) => {
+                  const reached = viewedWeek >= p.from;
+                  const current = viewedWeek >= p.from && viewedWeek <= p.to;
+                  return (
+                    <div key={p.label} className="list-row">
+                      <span className="mini-dot" style={{ background: reached ? "var(--color-accent)" : undefined }} />
+                      <div className="grow">
+                        <span style={{ fontWeight: 600 }}>{p.label}</span> <span className="muted">{p.desc}</span>
+                      </div>
+                      {current && <span className="badge badge-info">Current</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* HISTORY */}
+        {tab === "history" && (
+          <div className="stack">
+            <SectionHead eyebrow="Your record" title="History" />
+            <div className="stat-grid">
+              <div className="stat"><div className="stat-value">{totalSessions}</div><div className="muted">Sessions</div></div>
+              <div className="stat"><div className="stat-value">{fullWeeks}</div><div className="muted">Full weeks</div></div>
+              <div className="stat"><div className="stat-value">{Math.max(currentProgramWeek, 0)}</div><div className="muted">Program week</div></div>
+            </div>
+
+            {backupDue && (
+              <div className="alert alert-gold">
+                <Icon name="info" />
+                <div>{daysSinceBackup === null ? "You haven't backed up yet." : `Last backup was ${daysSinceBackup} days ago.`} History lives only on this device — export a copy so it's safe if you clear your browser or switch phones.</div>
+              </div>
+            )}
+
+            <section className="card" style={{ padding: "0 var(--space-4)" }}>
+              {historyWeeks.map((w) => {
+                const n = programWeek(data.programStart, w);
+                const done = weekSessions(log, w);
+                return (
+                  <button key={w} type="button" className="list-row" style={{ width: "100%", background: "none", border: "none", borderBottom: "1px solid var(--line-100)", cursor: "pointer", textAlign: "left" }}
+                    onClick={() => { setWeekStart(w); setTab("week"); }}>
+                    <div className="grow">
+                      <div style={{ fontWeight: 600 }}>{n >= 1 ? `Week ${n}` : "Before program"}{w === thisWeek ? " · This week" : ""}</div>
+                      <div className="muted">{formatWeekRange(w)}</div>
+                    </div>
+                    <div className="mini-dots" aria-label={`${done} of ${SESSIONS_PER_WEEK} sessions`}>
+                      {SCHEDULE.map((d, i) => d.type !== "rest" && (
+                        <span key={d.day} className={`mini-dot ${isSessionComplete(log, addDays(w, i)) ? "done" : ""}`} title={d.label} />
+                      ))}
+                    </div>
+                    <span className="muted" style={{ width: 28, textAlign: "right" }}>{done}/{SESSIONS_PER_WEEK}</span>
+                    <Icon name="chevronRight" size={16} style={{ color: "var(--color-text-muted)" }} />
+                  </button>
+                );
+              })}
+            </section>
+
+            <section className="card">
+              <div className="card-title" style={{ marginBottom: "var(--space-2)" }}>Backup &amp; restore</div>
+              <p className="body">Your sessions and notes are saved on this device only — nothing is sent to a server. Export a backup file to keep a copy, then import it on a new phone or after clearing your browser.</p>
+              <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-3)", flexWrap: "wrap" }}>
+                <button type="button" className="btn btn-primary" onClick={handleExport}><Icon name="download" /> Export backup</button>
+                <button type="button" className="btn btn-secondary" onClick={() => fileInput.current && fileInput.current.click()}><Icon name="upload" /> Import backup</button>
+                <input ref={fileInput} type="file" accept="application/json,.json" onChange={handleImport} className="sr-only" tabIndex={-1} aria-hidden="true" />
+              </div>
+              {importMsg && (
+                <div className={`alert ${importMsg.ok ? "alert-success" : "alert-warn"}`} style={{ marginTop: "var(--space-3)" }} role="status">
+                  <Icon name={importMsg.ok ? "check" : "alert"} />
+                  <div>{importMsg.text}</div>
+                </div>
+              )}
+              <div className="muted" style={{ marginTop: "var(--space-3)" }}>
+                {data.lastBackup ? `Last backup: ${formatLong(data.lastBackup.slice(0, 10))}` : "No backup yet."}
+                {" · "}
+                {persisted ? "Storage protected from automatic clearing." : "Browser may clear storage if space runs low."}
+              </div>
+            </section>
+
+            <section className="card">
+              <label className="field-label" htmlFor="program-start">Program start (week 1)</label>
+              <input id="program-start" type="date" className="input" value={data.programStart} max={today}
+                onChange={(e) => { if (e.target.value) setData((prev) => ({ ...prev, programStart: startOfWeek(e.target.value) })); }} />
+              <p className="muted" style={{ marginTop: "var(--space-2)" }}>Weeks run Monday to Sunday. Changing this renumbers program weeks and the spin phase; logged sessions keep their dates.</p>
+            </section>
           </div>
         )}
 
         {/* ROUTINES */}
         {tab === "routines" && (
-          <div>
-            <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>Your Program</div>
-            <div style={{ fontSize: 20, fontWeight: "bold", color: BRAND.gold, marginBottom: 20 }}>Weekly Routines</div>
+          <div className="stack">
+            <SectionHead eyebrow="Your program" title="Weekly routines" />
             {ROUTINES.map((routine) => (
-              <div key={routine.id} style={{ background: BRAND.charcoal, borderRadius: 14, marginBottom: 16, border: "1px solid #3a3a3a", overflow: "hidden" }}>
-                <div style={{ padding: "14px 16px", borderBottom: "1px solid #3a3a3a", background: routine.id === "rest" ? "#282828" : "#2a2510" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ flex: 1, marginRight: 8 }}>
-                      <div style={{ fontSize: 16, fontWeight: "bold", marginBottom: 4 }}>{routine.icon} {routine.label}</div>
-                      <div style={{ fontSize: 12, color: "#888" }}>{routine.desc}</div>
-                    </div>
-                    <span style={{ padding: "3px 10px", background: routine.tagColor, borderRadius: 20, fontSize: 10, color: routine.tagTextColor, letterSpacing: 1, flexShrink: 0 }}>{routine.tag}</span>
+              <section key={routine.id} className="card">
+                <div className="card-head" style={{ alignItems: "flex-start" }}>
+                  <div>
+                    <div className="subtitle">{routine.label}</div>
+                    <p className="muted" style={{ marginTop: 2 }}>{routine.desc}</p>
                   </div>
+                  <span className={`badge ${routine.id === "rest" ? "badge-neutral" : routine.id === "wed" ? "badge-info" : "badge-navy"}`}>{routine.tag}</span>
                 </div>
                 {routine.exercises.length > 0 ? (
-                  <div style={{ padding: 16 }}>
+                  <>
                     {routine.spin && (
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #3a3a3a", marginBottom: 4 }}>
-                        <div style={{ fontSize: 13 }}>🚴 Spin Bike</div>
-                        <div style={{ fontSize: 12, color: BRAND.gold }}>{routine.spin.time}</div>
+                      <div className="list-row">
+                        <Icon name="bike" style={{ color: "var(--color-brand-primary)" }} />
+                        <div className="grow">Spin bike</div>
+                        <span className="muted">{routine.spin.time}</span>
                       </div>
                     )}
-                    {routine.exercises.map((ex, i) => (
-                      <div key={ex.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: i < routine.exercises.length - 1 ? "1px solid #333" : "none" }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 14 }}>{EXERCISES[ex.name]?.emoji} {ex.name}</div>
-                          <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>{EXERCISES[ex.name]?.muscle}</div>
+                    {routine.exercises.map((name) => (
+                      <div key={name} className="list-row">
+                        <div className="grow">
+                          <div>{name}</div>
+                          <div className="muted">{EXERCISES[name].muscle} · {EXERCISES[name].sets}</div>
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ fontSize: 11, color: BRAND.gold }}>{ex.sets}</div>
-                          <FormBtn name={ex.name} />
-                        </div>
+                        <FormBtn name={name} onOpen={setSelectedExercise} />
                       </div>
                     ))}
-                    <div style={{ marginTop: 12, padding: "8px 12px", background: "#1e1e1e", borderRadius: 8, fontSize: 11, color: "#777", borderLeft: `3px solid ${BRAND.goldDim}` }}>
-                      {routine.rest && <div>⏱ Rest: {routine.rest}</div>}
-                      <div style={{ marginTop: routine.rest ? 4 : 0 }}>💡 {routine.notes}</div>
+                    <div className="alert alert-info" style={{ marginTop: "var(--space-3)", display: "block" }}>
+                      {routine.rest && <div><strong>Rest:</strong> {routine.rest}</div>}
+                      <div>{routine.notes}</div>
                     </div>
-                  </div>
+                  </>
                 ) : (
-                  <div style={{ padding: 16, fontSize: 13, color: "#666" }}>🚶 {routine.notes}</div>
+                  <p className="body">{routine.notes}</p>
                 )}
-              </div>
+              </section>
             ))}
-            <div style={{ background: BRAND.charcoal, borderRadius: 12, padding: 16, border: "1px solid #3a3a3a" }}>
-              <div style={{ fontSize: 11, color: BRAND.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 12 }}>Key Principles</div>
+            <section className="card">
+              <div className="eyebrow" style={{ marginBottom: "var(--space-3)" }}>Key principles</div>
               {[
-                ["Progressive Overload", "Increase band resistance every 2–3 weeks as it gets easier."],
-                ["Spin First", "Always spin before bands. Fat burning mode first."],
-                ["Posture Matters", "Good posture makes chest fat look better immediately."],
-                ["Pain vs. Discomfort", "Muscle burn = OK. Joint pain = stop."],
-                ["Diet Is 70%", "Chest fat responds most to caloric deficit."],
+                ["Progressive overload", "Increase band resistance every 2–3 weeks as it gets easier."],
+                ["Spin first", "Always spin before bands. Fat burning mode first."],
+                ["Posture matters", "Good posture makes chest fat look better immediately."],
+                ["Pain vs. discomfort", "Muscle burn = OK. Joint pain = stop."],
+                ["Diet is 70%", "Chest fat responds most to caloric deficit."],
               ].map(([title, desc]) => (
-                <div key={title} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                  <span style={{ color: BRAND.gold, flexShrink: 0 }}>›</span>
+                <div key={title} style={{ display: "flex", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+                  <Icon name="chevronRight" size={16} style={{ color: "var(--color-accent-strong)", marginTop: 3 }} />
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: "bold" }}>{title}</div>
-                    <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{desc}</div>
+                    <div style={{ fontWeight: 600 }}>{title}</div>
+                    <p className="muted">{desc}</p>
                   </div>
                 </div>
               ))}
-            </div>
+            </section>
           </div>
         )}
 
         {/* FORM GUIDE */}
         {tab === "form" && (
           <div>
-            <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>Reference</div>
-            <div style={{ fontSize: 20, fontWeight: "bold", color: BRAND.gold, marginBottom: 6 }}>Form Guide</div>
-            <div style={{ fontSize: 13, color: "#888", marginBottom: 20 }}>Tap any exercise for setup, steps, coaching cues, and shoulder safety notes.</div>
-            {[
-              { label: "Chest & Back", emoji: "🏋️", keys: ["Banded Chest Press","Banded Chest Fly","Banded Row","Banded Pull-Aparts","Modified Push-Ups"] },
-              { label: "Arms & Shoulders", emoji: "💪", keys: ["Banded Bicep Curls","Banded Tricep Pressdowns","Banded Lateral Raises","Banded Front Raises"] },
-              { label: "Core", emoji: "🧱", keys: ["Plank Hold (3 × 30s)"] },
-            ].map(group => (
-              <div key={group.label} style={{ marginBottom: 24 }}>
-                <div style={{ fontSize: 11, color: "#666", letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 }}>{group.emoji} {group.label}</div>
-                {group.keys.map(exName => {
-                  const ex = EXERCISES[exName];
-                  return (
-                    <div key={exName} onClick={() => setSelectedExercise(exName)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 14px", marginBottom: 8, background: BRAND.charcoal, borderRadius: 10, border: "1px solid #333", cursor: "pointer" }}>
-                      <div style={{ fontSize: 22, flexShrink: 0 }}>{ex.emoji}</div>
+            <SectionHead eyebrow="Reference" title="Form guide">
+              <p className="muted" style={{ marginTop: "var(--space-1)" }}>Tap any exercise for setup, steps, coaching cues, and shoulder safety notes.</p>
+            </SectionHead>
+            {FORM_GROUPS.map((group) => (
+              <div key={group.label} style={{ marginBottom: "var(--space-6)" }}>
+                <div className="eyebrow" style={{ marginBottom: "var(--space-2)" }}>{group.label}</div>
+                <div className="stack">
+                  {group.keys.map((exName) => (
+                    <button key={exName} type="button" className="card selectable" style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }} onClick={() => setSelectedExercise(exName)}>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 14, fontWeight: "bold" }}>{exName}</div>
-                        <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>{ex.muscle} · {ex.sets}</div>
+                        <div style={{ fontWeight: 600 }}>{exName}</div>
+                        <div className="muted">{EXERCISES[exName].muscle} · {EXERCISES[exName].sets}</div>
                       </div>
-                      <div style={{ color: BRAND.goldDim, fontSize: 20 }}>›</div>
-                    </div>
-                  );
-                })}
+                      <Icon name="chevronRight" style={{ color: "var(--color-text-muted)" }} />
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
-            <div style={{ padding: "12px 16px", background: "#2a1a0a", border: `1px solid ${BRAND.warn}`, borderRadius: 10, fontSize: 12, color: BRAND.warn }}>
-              ⚠️ Right shoulder not yet evaluated. Stop any exercise that causes joint pain. Muscle burn is fine — sharp or deep pain is not.
+            <div className="alert alert-warn">
+              <Icon name="alert" />
+              <div>Right shoulder not yet evaluated. Stop any exercise that causes joint pain. Muscle burn is fine — sharp or deep pain is not.</div>
             </div>
           </div>
         )}
 
         {/* SPIN */}
         {tab === "spin" && (
-          <div>
-            <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>Cardio</div>
-            <div style={{ fontSize: 20, fontWeight: "bold", color: BRAND.gold, marginBottom: 20 }}>Spin Bike Protocol</div>
+          <div className="stack">
+            <SectionHead eyebrow="Cardio" title="Spin bike protocol" />
             {SPIN_PHASES.map((phase, i) => (
-              <div key={phase.weeks} onClick={() => setSpinPhase(i)} style={{ padding: 16, marginBottom: 10, borderRadius: 12, background: spinPhase === i ? "#2a2510" : BRAND.charcoal, border: `1px solid ${spinPhase === i ? BRAND.gold : "#333"}`, cursor: "pointer", transition: "all 0.2s" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, color: BRAND.gold, fontWeight: "bold" }}>{phase.weeks}</div>
-                  <div style={{ fontSize: 11, background: spinPhase === i ? BRAND.gold : "#444", color: spinPhase === i ? BRAND.dark : "#888", padding: "3px 10px", borderRadius: 20 }}>{phase.total}</div>
+              <button key={phase.weeks} type="button" className={`card selectable ${shownSpin === i ? "selected" : ""}`} onClick={() => setSpinView(i)} aria-pressed={shownSpin === i}>
+                <div className="card-head" style={{ marginBottom: "var(--space-2)" }}>
+                  <div className="card-title">{phase.weeks}</div>
+                  <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                    {i === currentSpinPhase && <span className="badge badge-info">Your phase</span>}
+                    <span className="badge badge-neutral">{phase.total}</span>
+                  </div>
                 </div>
-                <div style={s}>{phase.desc}</div>
-                {phase.intervals && <div style={{ marginTop: 8, fontSize: 11, color: BRAND.goldDim }}>↑ Interval training — push hard, recover easy</div>}
-              </div>
+                <p className="body">{phase.desc}</p>
+                {phase.intervals && <p className="muted" style={{ marginTop: "var(--space-1)" }}>Interval training — push hard, recover easy.</p>}
+              </button>
             ))}
-            <div style={{ marginTop: 20, background: BRAND.charcoal, borderRadius: 12, padding: 20, textAlign: "center", border: "1px solid #3a3a3a" }}>
-              <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 }}>Session Timer</div>
-              <div style={{ fontSize: 48, fontFamily: "monospace", color: BRAND.gold, letterSpacing: 4, marginBottom: 16 }}>{fmt(timerVal)}</div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-                <button onClick={() => setTimerRunning(r => !r)} style={{ padding: "10px 24px", borderRadius: 24, border: "none", background: timerRunning ? BRAND.warn : BRAND.gold, color: BRAND.dark, fontWeight: "bold", fontSize: 13, cursor: "pointer" }}>
-                  {timerRunning ? "Pause" : "Start"}
+            <section className="card" style={{ textAlign: "center", padding: "var(--space-6) var(--space-4)" }}>
+              <div className="eyebrow" style={{ marginBottom: "var(--space-2)" }}>Session timer</div>
+              <div className="timer" aria-live="off">{fmtTimer(timer.seconds)}</div>
+              <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "center", marginTop: "var(--space-4)" }}>
+                <button type="button" className={`btn ${timer.running ? "btn-accent" : "btn-primary"}`} style={{ minWidth: 110 }} onClick={timer.toggle}>
+                  {timer.running ? "Pause" : "Start"}
                 </button>
-                <button onClick={() => { setTimerRunning(false); setTimerVal(0); }} style={{ padding: "10px 24px", borderRadius: 24, border: "1px solid #555", background: "transparent", color: "#888", fontSize: 13, cursor: "pointer" }}>Reset</button>
+                <button type="button" className="btn btn-secondary" onClick={timer.reset}>Reset</button>
               </div>
-            </div>
-            <div style={{ marginTop: 12, padding: "10px 14px", background: "#0a1a0f", border: `1px solid ${BRAND.success}`, borderRadius: 8, fontSize: 12, color: BRAND.success }}>
-              💡 Sit tall. Don't hunch. Hydrate before, during, and after. Resistance up = more calorie burn.
+            </section>
+            <div className="alert alert-success">
+              <Icon name="info" />
+              <div>Sit tall. Don't hunch. Hydrate before, during, and after. Resistance up = more calorie burn.</div>
             </div>
           </div>
         )}
 
         {/* NOTES */}
         {tab === "notes" && (
-          <div>
-            <div style={{ fontSize: 11, color: "#888", letterSpacing: 2, textTransform: "uppercase", marginBottom: 4 }}>Journal</div>
-            <div style={{ fontSize: 20, fontWeight: "bold", color: BRAND.gold, marginBottom: 16 }}>Session Notes</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-              <input value={noteInput} onChange={e => setNoteInput(e.target.value)} onKeyDown={e => e.key === "Enter" && saveNote()} placeholder="How'd it go today?" style={{ flex: 1, padding: "10px 14px", background: BRAND.charcoal, border: "1px solid #444", borderRadius: 8, color: BRAND.white, fontFamily: "inherit", fontSize: 13, outline: "none" }} />
-              <button onClick={saveNote} style={{ padding: "10px 16px", background: BRAND.gold, border: "none", borderRadius: 8, color: BRAND.dark, fontWeight: "bold", cursor: "pointer", fontSize: 16 }}>+</button>
-            </div>
-            {Object.keys(notes).length === 0 ? (
-              <div style={{ textAlign: "center", color: "#555", padding: 30, fontSize: 14 }}>No notes yet. Log your first session!</div>
+          <div className="stack">
+            <SectionHead eyebrow="Journal" title="Session notes" />
+            <form style={{ display: "flex", gap: "var(--space-2)" }} onSubmit={(e) => { e.preventDefault(); saveNote(); }}>
+              <label htmlFor="note-input" className="sr-only">New note</label>
+              <input id="note-input" className="input" value={noteInput} onChange={(e) => setNoteInput(e.target.value)} placeholder="How'd it go today?" />
+              <button type="submit" className="btn btn-primary btn-icon" style={{ minHeight: 40, width: 44 }} aria-label="Add note"><Icon name="plus" /></button>
+            </form>
+            {noteDates.length === 0 ? (
+              <p className="muted" style={{ textAlign: "center", padding: "var(--space-6) 0" }}>No notes yet. Log your first session.</p>
             ) : (
-              Object.entries(notes).reverse().map(([date, entries]) => (
-                <div key={date} style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 11, color: BRAND.gold, letterSpacing: 2, textTransform: "uppercase", marginBottom: 8 }}>{date}</div>
-                  {entries.map((note, i) => (
-                    <div key={i} style={{ padding: "10px 14px", background: BRAND.charcoal, borderRadius: 8, marginBottom: 6, fontSize: 13, borderLeft: `3px solid ${BRAND.goldDim}`, color: "#ccc" }}>{note}</div>
-                  ))}
+              noteDates.map((date) => (
+                <div key={date}>
+                  <div className="eyebrow" style={{ marginBottom: "var(--space-2)" }}>{formatLong(date)}{date === today ? " · Today" : ""}</div>
+                  <div className="stack">
+                    {notesByDate[date].map((note) => (
+                      <div key={note.id} className="card" style={{ display: "flex", gap: "var(--space-2)", alignItems: "flex-start", padding: "var(--space-3) var(--space-4)" }}>
+                        <p className="body" style={{ flex: 1, color: "var(--color-text-primary)" }}>{note.text}</p>
+                        <button type="button" className="btn btn-ghost btn-icon" style={{ minHeight: 28, width: 28 }} onClick={() => deleteNote(note.id)} aria-label="Delete note">
+                          <Icon name="x" size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))
             )}
-            <div style={{ marginTop: 20, padding: 16, background: BRAND.charcoal, borderRadius: 12, border: "1px solid #3a3a3a" }}>
-              <div style={{ fontSize: 13, color: BRAND.gold, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>⚖️ Weight Goal</div>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 13, color: "#888" }}>Goal</span>
-                <span style={{ fontSize: 13, color: BRAND.gold }}>–30 lbs by August</span>
+            <section className="card" style={{ marginTop: "var(--space-5)" }}>
+              <label className="field-label" htmlFor="goal-input">Goal</label>
+              <input id="goal-input" className="input" value={data.goal} maxLength={80} placeholder="Set a goal (saved on this device only)"
+                onChange={(e) => { const goal = e.target.value; setData((prev) => ({ ...prev, goal })); }} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: "var(--space-3)" }}>
+                <span className="muted">Sessions logged</span>
+                <span style={{ fontWeight: 600, color: "var(--color-success)" }}>{totalSessions} total</span>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 13, color: "#888" }}>Sessions logged</span>
-                <span style={{ fontSize: 13, color: BRAND.success }}>{totalSessions} total</span>
-              </div>
-              <div style={{ marginTop: 12, fontSize: 11, color: "#555", fontStyle: "italic" }}>Consistency is the only cheat code. Keep showing up.</div>
-            </div>
+              <p className="editorial" style={{ marginTop: "var(--space-3)" }}>Consistency is the only cheat code. Keep showing up.</p>
+            </section>
           </div>
         )}
-
-      </div>
-      <div style={{ height: 30 }} />
+      </main>
     </div>
   );
 }
